@@ -1,0 +1,25 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "refresh_interval": "1s"
+  },
+  "mappings": {
+    "properties": {
+      "productId":         { "type": "keyword" },
+      "name":              { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+      "category":          { "type": "keyword" },
+      "brand":             { "type": "keyword" },
+      "description":       { "type": "text" },
+      "price":             { "type": "scaled_float", "scaling_factor": 100 },
+      "currency":          { "type": "keyword" },
+      "totalStock":        { "type": "integer" },
+      "stockByWarehouse":  { "type": "object", "dynamic": true },
+      "completeness":      { "type": "float" },
+      "lastProductUpdate": { "type": "date" },
+      "lastPriceUpdate":   { "type": "date" },
+      "lastStockUpdate":   { "type": "date" },
+      "indexedAt":         { "type": "date" }
+    }
+  }
+}

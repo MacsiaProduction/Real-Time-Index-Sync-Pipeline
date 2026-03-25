@@ -1,0 +1,131 @@
+{
+  "title": "RT Index Sync Pipeline",
+  "uid": "rt-index-pipeline",
+  "schemaVersion": 36,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Events Processed / sec",
+      "type": "graph",
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum(rate(flink_taskmanager_job_task_operator_events_processed_products[1m]))",
+          "legendFormat": "Products"
+        },
+        {
+          "expr": "sum(rate(flink_taskmanager_job_task_operator_events_processed_prices[1m]))",
+          "legendFormat": "Prices"
+        },
+        {
+          "expr": "sum(rate(flink_taskmanager_job_task_operator_events_processed_stock[1m]))",
+          "legendFormat": "Stock"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Join Completeness Ratio",
+      "type": "gauge",
+      "gridPos": {"x": 12, "y": 0, "w": 6, "h": 8},
+      "targets": [
+        {
+          "expr": "sum(flink_taskmanager_job_task_operator_join_hits) / (sum(flink_taskmanager_job_task_operator_join_hits) + sum(flink_taskmanager_job_task_operator_join_misses))",
+          "legendFormat": "Completeness"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0, "max": 1,
+          "thresholds": {
+            "steps": [
+              {"value": 0, "color": "red"},
+              {"value": 0.9, "color": "yellow"},
+              {"value": 0.95, "color": "green"}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Total Events / sec",
+      "type": "graph",
+      "gridPos": {"x": 18, "y": 0, "w": 6, "h": 8},
+      "targets": [
+        {
+          "expr": "sum(rate(flink_taskmanager_job_task_operator_events_processed_products[1m])) + sum(rate(flink_taskmanager_job_task_operator_events_processed_prices[1m])) + sum(rate(flink_taskmanager_job_task_operator_events_processed_stock[1m]))",
+          "legendFormat": "Total Events / sec"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Checkpoint Duration (ms)",
+      "type": "graph",
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "flink_jobmanager_job_lastCheckpointDuration",
+          "legendFormat": "Last Checkpoint Duration"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Kafka Consumer Lag (records)",
+      "type": "graph",
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum(flink_taskmanager_job_task_operator_KafkaSourceReader_KafkaConsumer_records_lag_max{task_name=~\".*prices.*\"})",
+          "legendFormat": "Prices Lag"
+        },
+        {
+          "expr": "sum(flink_taskmanager_job_task_operator_KafkaSourceReader_KafkaConsumer_records_lag_max{task_name=~\".*stock.*\"})",
+          "legendFormat": "Stock Lag"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Dedup Filtered / sec",
+      "type": "graph",
+      "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum(rate(flink_taskmanager_job_task_operator_dedup_filtered[1m]))",
+          "legendFormat": "Dedup Filtered"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Pipeline Latency (ms)",
+      "type": "graph",
+      "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "avg(flink_taskmanager_job_task_operator_pipeline_latency_ms)",
+          "legendFormat": "Avg Latency"
+        },
+        {
+          "expr": "max(flink_taskmanager_job_task_operator_pipeline_latency_ms)",
+          "legendFormat": "Max Latency"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        }
+      }
+    }
+  ]
+}

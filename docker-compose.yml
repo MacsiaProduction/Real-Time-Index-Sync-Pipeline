@@ -1,0 +1,218 @@
+x-flink-common: &flink-common
+  build:
+    context: .
+    dockerfile: docker/flink/Dockerfile
+  depends_on:
+    kafka:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+    elasticsearch:
+      condition: service_healthy
+
+services:
+
+  kafka:
+    image: apache/kafka:4.0.0
+    hostname: kafka
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  postgres:
+    image: postgres:16
+    hostname: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: pipeline
+      POSTGRES_USER: pipeline
+      POSTGRES_PASSWORD: pipeline
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "max_wal_senders=10"
+    volumes:
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipeline -d pipeline"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    hostname: elasticsearch
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  es-setup:
+    image: curlimages/curl:latest
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - ./elasticsearch/index-mapping.json:/mapping/index-mapping.json
+      - ./docker/elasticsearch/setup.sh:/setup.sh
+    entrypoint: ["/bin/sh", "/setup.sh"]
+    restart: on-failure
+
+  flink-jobmanager:
+    <<: *flink-common
+    hostname: flink-jobmanager
+    ports:
+      - "8081:8081"
+      - "9249:9249"
+    command: standalone-job --job-classname com.pipeline.flink.PipelineJob
+    environment:
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_DATABASE=pipeline
+      - PG_USERNAME=pipeline
+      - PG_PASSWORD=pipeline
+      - PG_SCHEMA_LIST=public
+      - PG_TABLE_LIST=public.products
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC_PRICES=prices
+      - KAFKA_TOPIC_STOCK=stock
+      - KAFKA_TOPIC_DLQ=dlq
+      - KAFKA_GROUP_ID=rt-index-pipeline
+      - ES_HOST=elasticsearch
+      - ES_PORT=9200
+      - ES_INDEX_NAME=products
+      - CHECKPOINT_INTERVAL_MS=60000
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/overview"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  flink-taskmanager:
+    <<: *flink-common
+    hostname: flink-taskmanager
+    command: taskmanager
+    ports:
+      - "9250:9249"
+    environment:
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_DATABASE=pipeline
+      - PG_USERNAME=pipeline
+      - PG_PASSWORD=pipeline
+      - PG_SCHEMA_LIST=public
+      - PG_TABLE_LIST=public.products
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC_PRICES=prices
+      - KAFKA_TOPIC_STOCK=stock
+      - KAFKA_TOPIC_DLQ=dlq
+      - KAFKA_GROUP_ID=rt-index-pipeline
+      - ES_HOST=elasticsearch
+      - ES_PORT=9200
+      - ES_INDEX_NAME=products
+      - CHECKPOINT_INTERVAL_MS=60000
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - TASK_MANAGER_NUMBER_OF_TASK_SLOTS=8
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+
+  kafka-setup:
+    image: apache/kafka:4.0.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command: >
+      /bin/bash -c "
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic prices --partitions 8 --replication-factor 1 &&
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic stock --partitions 8 --replication-factor 1 &&
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic dlq --partitions 1 --replication-factor 1 &&
+      echo 'Kafka topics ready'
+      "
+    restart: "no"
+
+  generator:
+    build:
+      context: .
+      dockerfile: docker/generator/Dockerfile
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PG_JDBC_URL: jdbc:postgresql://postgres:5432/pipeline
+      PG_USERNAME: pipeline
+      PG_PASSWORD: pipeline
+      KAFKA_TOPIC_PRICES: prices
+      KAFKA_TOPIC_STOCK: stock
+      PRODUCT_POOL_SIZE: "2000"
+      PRODUCTS_RATE_PER_SEC: "100"
+      PRICES_RATE_PER_SEC: "2000"
+      STOCK_RATE_PER_SEC: "2000"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      kafka-setup:
+        condition: service_completed_successfully
+
+  prometheus:
+    image: prom/prometheus:latest
+    hostname: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana:latest
+    hostname: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboard.json:/var/lib/grafana/dashboards/dashboard.json
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_data:
+  es_data:
